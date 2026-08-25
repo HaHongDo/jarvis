@@ -1,0 +1,8 @@
+ollama
+pytest
+pyyaml
+sounddevice
+soundfile
+numpy
+faster-whisper
+kokoro>=0.9.4

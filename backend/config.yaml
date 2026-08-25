@@ -1,0 +1,16 @@
+audio:
+  sample_rate: 16000
+  channels: 1
+  max_recording_seconds: 15
+
+stt:
+  model: small
+  device: cpu
+  compute_type: int8
+  language: en
+  vad_filter: true
+
+tts:
+  language: en-us
+  voice: af_heart
+  speed: 1.0
