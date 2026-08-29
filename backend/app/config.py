@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4")
 
 SYSTEM_PROMPT = """You are Jarvis, a local virtual assistant.
 
