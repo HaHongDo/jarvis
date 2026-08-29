@@ -1,4 +1,4 @@
-from app.llm import OllamaLLM
+from app.llm import LLMResponse, OllamaLLM
 
 
 def test_chat_returns_nonempty_response():
@@ -7,5 +7,6 @@ def test_chat_returns_nonempty_response():
 
     response = llm.chat(messages)
 
-    assert response
-    assert isinstance(response, str)
+    assert isinstance(response, LLMResponse)
+    assert response.content
+    assert not response.has_tool_calls()

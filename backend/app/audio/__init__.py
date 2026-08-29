@@ -1,4 +1,4 @@
-from .microphone import AudioRecorder
+from .microphone import AudioRecorder, MicrophoneStream
 from .player import AudioPlayer
 
-__all__ = ["AudioRecorder", "AudioPlayer"]
+__all__ = ["AudioRecorder", "AudioPlayer", "MicrophoneStream"]

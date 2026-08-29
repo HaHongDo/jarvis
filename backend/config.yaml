@@ -2,6 +2,14 @@ audio:
   sample_rate: 16000
   channels: 1
   max_recording_seconds: 15
+  frame_ms: 80
+  silence_timeout_ms: 1000
+  silence_threshold: 0.02
+
+wakeword:
+  model: hey_jarvis
+  threshold: 0.5
+  activation_delay_ms: 200
 
 stt:
   model: small
@@ -14,3 +22,7 @@ tts:
   language: en-us
   voice: af_heart
   speed: 1.0
+  min_chunk_characters: 20
+
+tools:
+  max_rounds: 5  # max LLM<->tool round-trips per user turn before giving up

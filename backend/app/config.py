@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3")
 
 SYSTEM_PROMPT = """You are Jarvis, a local virtual assistant.
 
@@ -27,10 +27,15 @@ _config = _load_yaml_config()
 _audio_config = _config.get("audio", {})
 _stt_config = _config.get("stt", {})
 _tts_config = _config.get("tts", {})
+_wakeword_config = _config.get("wakeword", {})
+_tools_config = _config.get("tools", {})
 
 AUDIO_SAMPLE_RATE = _audio_config.get("sample_rate", 16000)
 AUDIO_CHANNELS = _audio_config.get("channels", 1)
 MAX_RECORDING_SECONDS = _audio_config.get("max_recording_seconds", 15)
+AUDIO_FRAME_MS = _audio_config.get("frame_ms", 80)
+SILENCE_TIMEOUT_MS = _audio_config.get("silence_timeout_ms", 1000)
+SILENCE_THRESHOLD = _audio_config.get("silence_threshold", 0.02)
 
 STT_MODEL = _stt_config.get("model", "small")
 STT_DEVICE = _stt_config.get("device", "cpu")
@@ -41,3 +46,10 @@ STT_VAD_FILTER = _stt_config.get("vad_filter", True)
 TTS_LANGUAGE = _tts_config.get("language", "en-us")
 TTS_VOICE = _tts_config.get("voice", "af_heart")
 TTS_SPEED = _tts_config.get("speed", 1.0)
+TTS_MIN_CHUNK_CHARACTERS = _tts_config.get("min_chunk_characters", 20)
+
+WAKEWORD_MODEL = _wakeword_config.get("model", "hey_jarvis")
+WAKEWORD_THRESHOLD = _wakeword_config.get("threshold", 0.5)
+WAKEWORD_ACTIVATION_DELAY_MS = _wakeword_config.get("activation_delay_ms", 200)
+
+MAX_TOOL_ROUNDS = _tools_config.get("max_rounds", 5)

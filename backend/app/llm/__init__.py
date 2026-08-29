@@ -1,4 +1,12 @@
-from .base import LLM
-from .ollama import OllamaLLM, OllamaConnectionError, OllamaModelNotFoundError
+from .base import LLM, LLMResponse, StreamEvent, ToolCall
+from .ollama import OllamaConnectionError, OllamaLLM, OllamaModelNotFoundError
 
-__all__ = ["LLM", "OllamaLLM", "OllamaConnectionError", "OllamaModelNotFoundError"]
+__all__ = [
+    "LLM",
+    "LLMResponse",
+    "StreamEvent",
+    "ToolCall",
+    "OllamaLLM",
+    "OllamaConnectionError",
+    "OllamaModelNotFoundError",
+]

@@ -9,6 +9,7 @@ save them here:
 
 - `hello.wav` — someone saying "Hello, this is a microphone test."
 - `goroutine.wav` — someone asking a question containing the word "goroutine"
+- `hey_jarvis.wav` — someone saying "Hey Jarvis"
 
-The corresponding tests in `test_stt.py` are skipped automatically when a
-fixture file is missing.
+The corresponding tests in `test_stt.py` and `test_wakeword.py` are skipped
+automatically when a fixture file is missing.

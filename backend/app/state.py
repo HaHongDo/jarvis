@@ -2,7 +2,7 @@ from enum import Enum, auto
 
 
 class AssistantState(Enum):
-    IDLE = auto()
+    LISTENING = auto()
     RECORDING = auto()
     TRANSCRIBING = auto()
     THINKING = auto()
