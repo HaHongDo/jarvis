@@ -1,6 +1,7 @@
 ollama
 pytest
 pyyaml
+requests
 sounddevice
 soundfile
 numpy

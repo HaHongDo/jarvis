@@ -3,9 +3,6 @@ from pathlib import Path
 
 import yaml
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3")
-
 SYSTEM_PROMPT = """You are Jarvis, a local virtual assistant.
 
 Be concise when answering simple questions.
@@ -24,11 +21,16 @@ def _load_yaml_config() -> dict:
 
 
 _config = _load_yaml_config()
+_ollama_config = _config.get("ollama", {})
 _audio_config = _config.get("audio", {})
 _stt_config = _config.get("stt", {})
 _tts_config = _config.get("tts", {})
 _wakeword_config = _config.get("wakeword", {})
 _tools_config = _config.get("tools", {})
+_search_config = _config.get("search", {})
+
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", _ollama_config.get("host", "http://localhost:11434"))
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", _ollama_config.get("model", "gemma4"))
 
 AUDIO_SAMPLE_RATE = _audio_config.get("sample_rate", 16000)
 AUDIO_CHANNELS = _audio_config.get("channels", 1)
@@ -53,3 +55,11 @@ WAKEWORD_THRESHOLD = _wakeword_config.get("threshold", 0.5)
 WAKEWORD_ACTIVATION_DELAY_MS = _wakeword_config.get("activation_delay_ms", 200)
 
 MAX_TOOL_ROUNDS = _tools_config.get("max_rounds", 5)
+
+SEARXNG_URL = os.environ.get("SEARXNG_URL", _search_config.get("searxng_url", "http://localhost:8080"))
+SEARCH_TIMEOUT_SECONDS = _search_config.get("timeout_seconds", 5)
+SEARCH_FETCH_RESULTS = _search_config.get("fetch_results", 10)
+SEARCH_MAX_RESULTS = _search_config.get("max_results", 5)
+SEARCH_CACHE_TTL_SECONDS = _search_config.get("cache_ttl_seconds", 900)
+SEARCH_LANGUAGE = _search_config.get("language", "en")
+SEARCH_SAFESEARCH = _search_config.get("safesearch", 1)

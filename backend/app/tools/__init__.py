@@ -1,7 +1,7 @@
 from .base import Tool, ToolResult, ToolValidationError
 from .calculator import CalculatorTool
-from .fake_search import FakeSearchTool
 from .registry import ToolRegistry
+from .search import SearchTool
 from .time import TimeTool
 
 
@@ -10,7 +10,7 @@ def default_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(CalculatorTool())
     registry.register(TimeTool())
-    registry.register(FakeSearchTool())
+    registry.register(SearchTool())
     return registry
 
 
@@ -21,6 +21,6 @@ __all__ = [
     "ToolRegistry",
     "CalculatorTool",
     "TimeTool",
-    "FakeSearchTool",
+    "SearchTool",
     "default_registry",
 ]

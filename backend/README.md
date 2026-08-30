@@ -1,4 +1,4 @@
-# Jarvis backend — Day 6
+# Jarvis backend — Day 7
 
 Always-listening voice CLI: wake word -> speech-to-text -> local LLM through Ollama (with
 tool calling) -> text-to-speech.
@@ -19,15 +19,33 @@ The LLM can call tools registered in `app/tools/`:
 |--------------|------------------------------------------------------|
 | `calculator` | Evaluates a math expression (safe AST eval, no `eval()`) |
 | `get_time`   | Current date/time for an IANA timezone               |
-| `search`     | Fake/stub web search — hardcoded results for now      |
+| `search`     | Web search backed by a local SearXNG instance          |
 
 `ResponseStreamer` runs the tool-calling loop itself: if the model asks for a tool instead
 of answering, the tool is executed via `ToolRegistry` (which validates arguments against
 the tool's JSON-schema `parameters` and logs every call), the result is fed back to the
 model, and the loop repeats — up to `tools.max_rounds` in `config.yaml` — until the model
 answers in plain text. Raw tool output is never sent to TTS directly; only the model's
-natural-language response is spoken. The fake search tool is a placeholder for the real
-SearXNG-backed search coming in Day 7.
+natural-language response is spoken.
+
+### Web search (`app/search/`)
+
+`search` is backed by a local [SearXNG](https://docs.searxng.org/) instance's JSON API:
+
+```text
+search(query) -> SearchService
+    -> SearchCache (normalized-query, TTL)     [cache miss ->]
+    -> SearXNGClient (HTTP GET /search?format=json)
+    -> SearchNormalizer (drop malformed/missing fields, dedup by normalized URL)
+    -> top N results
+    -> SearchContextBuilder (Markdown-ish text for the LLM, with source URLs)
+```
+
+Requires a local SearXNG instance with `search.formats: [json]` enabled in its
+`settings.yml` (see the [Day 7 plan](../day_7_implementation_plan.md)). If SearXNG is
+unreachable, times out, or returns no results, the tool returns a plain-language message
+(e.g. "I couldn't reach the web search service right now.") instead of raising, so the
+assistant can still respond.
 
 ## Setup
 
@@ -95,7 +113,18 @@ wakeword:
 
 tools:
   max_rounds: 5   # max LLM<->tool round-trips per user turn before giving up
+
+search:
+  searxng_url: http://localhost:8080
+  timeout_seconds: 5
+  fetch_results: 10   # raw results considered before dedup/normalization
+  max_results: 5      # results kept after normalization, sent to the LLM
+  cache_ttl_seconds: 900
+  language: en
+  safesearch: 1
 ```
+
+`search.searxng_url` can also be overridden with the `SEARXNG_URL` environment variable.
 
 ## Run
 
@@ -132,7 +161,8 @@ pytest
 ```
 
 - `tests/test_ollama.py` is an integration test that requires Ollama to be running with the configured model pulled.
-- `tests/test_tools.py` covers `CalculatorTool`, `TimeTool`, `FakeSearchTool`, and `ToolRegistry` (argument validation, unknown-tool handling, schema shape) — no external services required.
+- `tests/test_tools.py` covers `CalculatorTool`, `TimeTool`, `SearchTool`, and `ToolRegistry` (argument validation, unknown-tool handling, schema shape) — no external services required.
+- `tests/test_search.py` covers the SearXNG search pipeline (URL normalization/dedup, result normalization, context formatting, query cache, and `SearchService` orchestration) using a fake SearXNG client — no external services required.
 - `tests/test_response_streamer.py` also covers the tool-calling loop: a stub LLM that requests a tool then answers, the max-tool-rounds cutoff, and tool-error handling.
 - `tests/test_stt.py` runs prerecorded WAV files in `tests/audio/` through the STT pipeline. See `tests/audio/README.md` for which fixtures are checked in.
 - `tests/test_tts.py` covers Markdown preprocessing and an integration check that Kokoro produces audio (requires Kokoro + eSpeak NG installed).

@@ -2,6 +2,7 @@ import logging
 
 import numpy as np
 from openwakeword.model import Model
+from openwakeword.utils import download_models
 
 from ..config import WAKEWORD_MODEL, WAKEWORD_THRESHOLD
 from .base import WakeWordDetector
@@ -12,7 +13,8 @@ logger = logging.getLogger(__name__)
 class OpenWakeWordDetector(WakeWordDetector):
     def __init__(self, model_name: str = WAKEWORD_MODEL, threshold: float = WAKEWORD_THRESHOLD):
         logger.info("Loading openWakeWord model '%s' (threshold=%.2f)", model_name, threshold)
-        self.model = Model(wakeword_models=[model_name])
+        download_models([model_name])
+        self.model = Model(wakeword_models=[model_name], inference_framework="onnx")
         self.model_name = model_name
         self.threshold = threshold
         logger.info("openWakeWord model loaded")

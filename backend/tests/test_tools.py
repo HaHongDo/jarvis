@@ -1,4 +1,4 @@
-from app.tools import CalculatorTool, FakeSearchTool, TimeTool, ToolRegistry, default_registry
+from app.tools import CalculatorTool, SearchTool, TimeTool, ToolRegistry, default_registry
 from app.tools.base import ToolValidationError
 
 
@@ -50,12 +50,38 @@ def test_time_tool_rejects_unknown_timezone():
     assert not result.success
 
 
-def test_fake_search_returns_hardcoded_results():
-    result = FakeSearchTool().execute({"query": "Redis"})
+def test_search_tool_returns_context_text(monkeypatch):
+    from app.search import SearchContextBuilder, SearchResponse, SearchResult
+
+    class StubService:
+        def search(self, query):
+            return SearchResponse(
+                query=query,
+                results=[SearchResult(title=f"About {query}", url="https://example.com", snippet="...")],
+                result_count=1,
+                searched_at="2026-08-30T00:00:00+00:00",
+            )
+
+        def build_context(self, response):
+            return SearchContextBuilder().build(response.query, response.results)
+
+    result = SearchTool(service=StubService()).execute({"query": "Redis"})
 
     assert result.success
-    assert isinstance(result.result, list)
-    assert "Redis" in result.result[0]["title"]
+    assert "Redis" in result.result
+
+
+def test_search_tool_handles_backend_errors_gracefully():
+    from app.search import SearXNGError
+
+    class FailingService:
+        def search(self, query):
+            raise SearXNGError("boom")
+
+    result = SearchTool(service=FailingService()).execute({"query": "Redis"})
+
+    assert result.success
+    assert "couldn't reach" in result.result
 
 
 def test_tool_validate_arguments_checks_type():

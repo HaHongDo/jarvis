@@ -1,3 +1,7 @@
+ollama:
+  host: http://localhost:11434
+  model: gemma4
+
 audio:
   sample_rate: 16000
   channels: 1
@@ -26,3 +30,12 @@ tts:
 
 tools:
   max_rounds: 5  # max LLM<->tool round-trips per user turn before giving up
+
+search:
+  searxng_url: http://localhost:8080
+  timeout_seconds: 5
+  fetch_results: 10   # raw results considered before dedup/normalization
+  max_results: 5       # results kept after normalization, sent to the LLM
+  cache_ttl_seconds: 900
+  language: en
+  safesearch: 1
