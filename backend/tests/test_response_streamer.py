@@ -209,3 +209,101 @@ def test_stream_response_reports_tool_error_without_crashing():
 
     assert '"success": false' in reply
     assert "kaboom" in reply
+
+
+class _SearchStubTool(Tool):
+    """Fake `search` tool that records every query it actually receives, so tests can
+    verify the streamer's per-request budget and duplicate-query dedupe."""
+
+    name = "search"
+    description = "Fake search."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "time_range": {"type": "string"},
+        },
+        "required": ["query"],
+    }
+
+    def __init__(self):
+        self.received_queries = []
+
+    def run(self, arguments):
+        self.received_queries.append(arguments["query"])
+        return f"result for {arguments['query']}"
+
+
+def _search_calling_llm(queries, rounds=None):
+    """Builds a stub LLM that requests a search for each query in `queries` (one per
+    round), then answers in plain text once all queries have been requested."""
+
+    class _SearchLLM(LLM):
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, tools=None):
+            raise NotImplementedError
+
+        def stream_chat(self, messages, tools=None):
+            self.calls += 1
+            if self.calls <= len(queries):
+                query = queries[self.calls - 1]
+                yield StreamEvent(tool_calls=[ToolCall(name="search", arguments={"query": query})])
+                return
+            yield StreamEvent(content="Done searching.")
+
+    return _SearchLLM()
+
+
+def test_stream_response_enforces_search_budget_per_request():
+    llm = _search_calling_llm(["q1", "q2", "q3", "q4"])
+    tts = _StubTTS()
+    registry = ToolRegistry()
+    search_tool = _SearchStubTool()
+    registry.register(search_tool)
+    streamer = ResponseStreamer(
+        llm, tts, min_chunk_characters=1, tool_registry=registry, max_tool_rounds=10, max_searches_per_request=3
+    )
+
+    reply, _timings = streamer.stream_response([{"role": "user", "content": "search a lot"}])
+
+    assert search_tool.received_queries == ["q1", "q2", "q3"]
+    assert "Done searching." in reply
+
+
+def test_stream_response_deduplicates_repeated_search_queries():
+    llm = _search_calling_llm(["latest rust release", "Latest   Rust Release", "latest rust release"])
+    tts = _StubTTS()
+    registry = ToolRegistry()
+    search_tool = _SearchStubTool()
+    registry.register(search_tool)
+    streamer = ResponseStreamer(
+        llm, tts, min_chunk_characters=1, tool_registry=registry, max_tool_rounds=10, max_searches_per_request=5
+    )
+
+    streamer.stream_response([{"role": "user", "content": "what's new with rust"}])
+
+    # Only the first (normalized-unique) query actually reaches the tool.
+    assert search_tool.received_queries == ["latest rust release"]
+
+
+def test_stream_response_tracks_search_frequency_metric():
+    tts = _StubTTS()
+    registry = ToolRegistry()
+    registry.register(_SearchStubTool())
+    streamer = ResponseStreamer(
+        llm=_search_calling_llm(["q1"]), tts=tts, min_chunk_characters=1, tool_registry=registry
+    )
+
+    # Request 1: triggers a search.
+    streamer.stream_response([{"role": "user", "content": "search please"}])
+
+    # Requests 2 and 3: no search needed.
+    streamer.llm = _StubLLM(["No search needed."])
+    streamer.stream_response([{"role": "user", "content": "hi"}])
+    streamer.llm = _StubLLM(["Still no search."])
+    streamer.stream_response([{"role": "user", "content": "hi again"}])
+
+    assert streamer.total_requests == 3
+    assert streamer.search_requests == 1

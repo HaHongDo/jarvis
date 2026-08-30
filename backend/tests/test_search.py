@@ -3,8 +3,12 @@ import time
 import pytest
 
 from app.search import SearchCache, SearchContextBuilder, SearchNormalizer, SearchService, SearchResult
-from app.search.normalizer import normalize_url
+from app.search.normalizer import normalize_query, normalize_url
 from app.search.searxng import SearXNGError, SearXNGTimeoutError
+
+
+def test_normalize_query_collapses_whitespace_and_case():
+    assert normalize_query("  Latest   Rust Release  ") == "latest rust release"
 
 
 def test_normalize_url_strips_tracking_params_and_trailing_slash():
@@ -77,6 +81,14 @@ def test_context_builder_formats_results():
     assert "URL: https://rust-lang.org" in context
 
 
+def test_context_builder_warns_content_is_untrusted():
+    results = [SearchResult(title="Rust", url="https://rust-lang.org", snippet="A language.")]
+
+    context = SearchContextBuilder().build("rust", results)
+
+    assert "untrusted" in context.lower()
+
+
 def test_context_builder_handles_no_results():
     context = SearchContextBuilder().build("nothing useful", [])
 
@@ -105,6 +117,24 @@ def test_cache_distinguishes_different_queries():
 
     assert cache.get("current bitcoin price") == "now"
     assert cache.get("bitcoin price in 2020") == "then"
+
+
+def test_cache_distinguishes_by_extra_params():
+    cache = SearchCache(ttl_seconds=60)
+    cache.set("go release", "today", time_range="day")
+    cache.set("go release", "this year", time_range="year")
+
+    assert cache.get("go release", time_range="day") == "today"
+    assert cache.get("go release", time_range="year") == "this year"
+    assert cache.get("go release") is None
+
+
+def test_cache_set_ttl_override_expires_independently_of_default_ttl():
+    cache = SearchCache(ttl_seconds=60)
+    cache.set("query", "value", ttl_seconds=0.01)
+    time.sleep(0.02)
+
+    assert cache.get("query") is None
 
 
 class _FakeClient:
@@ -148,3 +178,39 @@ def test_service_propagates_timeout_errors():
 
     with pytest.raises(SearXNGTimeoutError):
         service.search("rust")
+
+
+def test_service_cache_key_distinguishes_time_range():
+    payload = {"results": [{"title": "Rust", "url": "https://rust-lang.org", "content": "..."}]}
+    client = _FakeClient(payload=payload)
+    service = SearchService(client=client, cache=SearchCache(ttl_seconds=60))
+
+    service.search("rust release", time_range="day")
+    response = service.search("rust release", time_range="year")
+
+    assert not response.cached
+    assert client.calls == 2
+
+
+def test_service_realtime_freshness_bypasses_cache():
+    payload = {"results": [{"title": "BTC", "url": "https://example.com", "content": "..."}]}
+    client = _FakeClient(payload=payload)
+    service = SearchService(client=client, cache=SearchCache(ttl_seconds=60))
+
+    service.search("bitcoin price", freshness="realtime")
+    response = service.search("bitcoin price", freshness="realtime")
+
+    assert not response.cached
+    assert client.calls == 2
+
+
+def test_service_normal_freshness_still_caches():
+    payload = {"results": [{"title": "Rust", "url": "https://rust-lang.org", "content": "..."}]}
+    client = _FakeClient(payload=payload)
+    service = SearchService(client=client, cache=SearchCache(ttl_seconds=60))
+
+    service.search("rust", freshness="normal")
+    response = service.search("rust", freshness="normal")
+
+    assert response.cached
+    assert client.calls == 1

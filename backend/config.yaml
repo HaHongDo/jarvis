@@ -39,3 +39,10 @@ search:
   cache_ttl_seconds: 900
   language: en
   safesearch: 1
+  max_searches_per_request: 3  # per-user-turn search budget, guards against agent loops
+  freshness_ttl_seconds:        # cache TTL per freshness hint; "realtime" bypasses cache
+    static: 86400   # 24h
+    normal: 3600    # 1h
+    recent: 600     # 10m
+    realtime: 0     # never cached
+

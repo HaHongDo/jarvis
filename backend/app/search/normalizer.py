@@ -1,3 +1,4 @@
+import re
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -15,6 +16,12 @@ _TRACKING_PARAMS = {
     "mc_cid",
     "mc_eid",
 }
+
+
+def normalize_query(query: str) -> str:
+    """Collapse whitespace and lowercase a query so equivalent queries (e.g. differing
+    only in case or spacing) compare equal for cache keys and duplicate-search detection."""
+    return re.sub(r"\s+", " ", query.strip().lower())
 
 
 def normalize_url(url: str) -> str:

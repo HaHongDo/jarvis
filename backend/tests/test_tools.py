@@ -54,7 +54,7 @@ def test_search_tool_returns_context_text(monkeypatch):
     from app.search import SearchContextBuilder, SearchResponse, SearchResult
 
     class StubService:
-        def search(self, query):
+        def search(self, query, **kwargs):
             return SearchResponse(
                 query=query,
                 results=[SearchResult(title=f"About {query}", url="https://example.com", snippet="...")],
@@ -71,11 +71,58 @@ def test_search_tool_returns_context_text(monkeypatch):
     assert "Redis" in result.result
 
 
+def test_search_tool_forwards_time_range_and_freshness():
+    from app.search import SearchContextBuilder, SearchResponse, SearchResult
+
+    class RecordingService:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, query, **kwargs):
+            self.calls.append((query, kwargs))
+            return SearchResponse(
+                query=query,
+                results=[SearchResult(title="X", url="https://example.com", snippet="...")],
+                result_count=1,
+                searched_at="2026-08-30T00:00:00+00:00",
+            )
+
+        def build_context(self, response):
+            return SearchContextBuilder().build(response.query, response.results)
+
+    service = RecordingService()
+    SearchTool(service=service).execute(
+        {"query": "bitcoin price", "time_range": "day", "freshness": "realtime"}
+    )
+
+    assert service.calls == [("bitcoin price", {"time_range": "day", "freshness": "realtime"})]
+
+
+def test_search_tool_defaults_freshness_to_normal():
+    from app.search import SearchContextBuilder, SearchResponse, SearchResult
+
+    class RecordingService:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, query, **kwargs):
+            self.calls.append(kwargs)
+            return SearchResponse(query=query, results=[], result_count=0, searched_at="")
+
+        def build_context(self, response):
+            return SearchContextBuilder().build(response.query, response.results)
+
+    service = RecordingService()
+    SearchTool(service=service).execute({"query": "anything"})
+
+    assert service.calls == [{"time_range": None, "freshness": "normal"}]
+
+
 def test_search_tool_handles_backend_errors_gracefully():
     from app.search import SearXNGError
 
     class FailingService:
-        def search(self, query):
+        def search(self, query, **kwargs):
             raise SearXNGError("boom")
 
     result = SearchTool(service=FailingService()).execute({"query": "Redis"})

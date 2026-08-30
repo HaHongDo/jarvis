@@ -2,12 +2,15 @@ import logging
 import queue
 import threading
 import time
+import uuid
 from typing import Callable, Optional
 
-from ..config import MAX_TOOL_ROUNDS, TTS_MIN_CHUNK_CHARACTERS
+from ..config import MAX_SEARCHES_PER_REQUEST, MAX_TOOL_ROUNDS, TTS_MIN_CHUNK_CHARACTERS
 from ..llm.base import LLM, ToolCall
+from ..search.normalizer import normalize_query
 from ..tts.base import TextToSpeech
 from ..tts.preprocessing import preprocess_for_speech
+from ..tools.base import ToolResult
 from ..tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -18,6 +21,11 @@ _QUEUE_POLL_SECONDS = 0.1
 
 _MAX_ROUNDS_ERROR_MESSAGE = (
     "I tried using tools a few times but couldn't finish. Could you rephrase that?"
+)
+
+_SEARCH_TOOL_NAME = "search"
+_SEARCH_BUDGET_EXHAUSTED_MESSAGE = (
+    f"Search budget exhausted for this request (max {MAX_SEARCHES_PER_REQUEST} searches)."
 )
 
 
@@ -42,6 +50,12 @@ class ResponseStreamer:
     must never reach TTS directly), the tool is executed, and the model is asked again with
     the result added to the conversation - repeating until it answers in plain text or
     `max_tool_rounds` is exceeded.
+
+    Each call to `stream_response` is one user turn ("request"). Within a turn, calls to
+    the `search` tool are capped at `max_searches_per_request` and de-duplicated by
+    normalized query + time_range, so a model that loops or asks near-identical questions
+    can't spam the search backend; the streamer also tracks how many turns actually used
+    search for the `search_requests / total_requests` metric.
     """
 
     def __init__(
@@ -51,12 +65,16 @@ class ResponseStreamer:
         min_chunk_characters: int = TTS_MIN_CHUNK_CHARACTERS,
         tool_registry: Optional[ToolRegistry] = None,
         max_tool_rounds: int = MAX_TOOL_ROUNDS,
+        max_searches_per_request: int = MAX_SEARCHES_PER_REQUEST,
     ):
         self.llm = llm
         self.tts = tts
         self.min_chunk_characters = min_chunk_characters
         self.tool_registry = tool_registry
         self.max_tool_rounds = max_tool_rounds
+        self.max_searches_per_request = max_searches_per_request
+        self.total_requests = 0
+        self.search_requests = 0
 
     def stream_response(
         self,
@@ -83,14 +101,27 @@ class ResponseStreamer:
         tts_thread.start()
         player_thread.start()
 
+        request_id = uuid.uuid4().hex[:8]
+        search_state = {"request_id": request_id, "count": 0, "seen": {}}
+
         try:
-            assistant_response = self._produce_text(messages, text_queue, cancel_event, timings, start)
+            assistant_response = self._produce_text(
+                messages, text_queue, cancel_event, timings, start, search_state
+            )
         finally:
             text_queue.put(None)
             tts_thread.join()
             audio_queue.put(None)
             player_thread.join()
 
+        self.total_requests += 1
+        if search_state["count"] > 0:
+            self.search_requests += 1
+        logger.info(
+            "[METRICS] search_requests=%d/%d total",
+            self.search_requests,
+            self.total_requests,
+        )
         logger.info(
             "[LATENCY] LLM first-token: %.2fs | TTS first-chunk: %.2fs | first-audio: %.2fs",
             timings.get("first_token", -1.0),
@@ -106,6 +137,7 @@ class ResponseStreamer:
         cancel_event: threading.Event,
         timings: dict,
         start: float,
+        search_state: dict,
     ) -> str:
         tools = self.tool_registry.schemas() if self.tool_registry else None
         buffer = ""
@@ -141,7 +173,7 @@ class ResponseStreamer:
             if cancel_event.is_set():
                 return assistant_response
 
-            self._execute_tool_round(messages, pending_tool_calls)
+            self._execute_tool_round(messages, pending_tool_calls, search_state)
         else:
             logger.error("Max tool-call rounds (%d) exceeded", self.max_tool_rounds)
             buffer += _MAX_ROUNDS_ERROR_MESSAGE
@@ -152,7 +184,9 @@ class ResponseStreamer:
 
         return assistant_response
 
-    def _execute_tool_round(self, messages: list[dict], tool_calls: list[ToolCall]) -> None:
+    def _execute_tool_round(
+        self, messages: list[dict], tool_calls: list[ToolCall], search_state: dict
+    ) -> None:
         """Runs every requested tool sequentially and appends the assistant's tool-call
         message plus each tool's result to `messages`, so the next LLM call sees them."""
         messages.append(
@@ -165,8 +199,45 @@ class ResponseStreamer:
             }
         )
         for call in tool_calls:
-            result = self.tool_registry.execute(call.name, call.arguments)
-            messages.append({"role": "tool", "name": call.name, "content": result.to_content()})
+            content = self._execute_tool_call(call, search_state)
+            messages.append({"role": "tool", "name": call.name, "content": content})
+
+    def _execute_tool_call(self, call: ToolCall, search_state: dict) -> str:
+        if call.name == _SEARCH_TOOL_NAME:
+            return self._execute_search_call(call, search_state)
+        return self.tool_registry.execute(call.name, call.arguments).to_content()
+
+    def _execute_search_call(self, call: ToolCall, search_state: dict) -> str:
+        """Applies the per-request search budget and duplicate-query detection before
+        delegating to the real search tool (see Day 8: search budget + dedup)."""
+        request_id = search_state["request_id"]
+        query = call.arguments.get("query", "")
+        dedupe_key = (normalize_query(query), call.arguments.get("time_range"))
+
+        cached_content = search_state["seen"].get(dedupe_key)
+        if cached_content is not None:
+            logger.info("SEARCH request=%s query=%r decision=DUPLICATE (reusing prior result)", request_id, query)
+            return cached_content
+
+        if search_state["count"] >= self.max_searches_per_request:
+            logger.warning(
+                "SEARCH request=%s query=%r decision=BUDGET_EXHAUSTED (max %d)",
+                request_id,
+                query,
+                self.max_searches_per_request,
+            )
+            return ToolResult(success=False, error=_SEARCH_BUDGET_EXHAUSTED_MESSAGE).to_content()
+
+        search_state["count"] += 1
+        logger.info(
+            "SEARCH request=%s query=%r decision=SEARCH round=%d",
+            request_id,
+            query,
+            search_state["count"],
+        )
+        content = self.tool_registry.execute(call.name, call.arguments).to_content()
+        search_state["seen"][dedupe_key] = content
+        return content
 
     def _tts_worker(
         self,
