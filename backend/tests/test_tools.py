@@ -1,4 +1,4 @@
-from app.tools import CalculatorTool, SearchTool, TimeTool, ToolRegistry, default_registry
+from app.tools import CalculatorTool, FetchPageTool, SearchTool, TimeTool, ToolRegistry, default_registry
 from app.tools.base import ToolValidationError
 
 
@@ -131,6 +131,73 @@ def test_search_tool_handles_backend_errors_gracefully():
     assert "couldn't reach" in result.result
 
 
+def test_fetch_page_tool_returns_context_text():
+    from datetime import datetime, timezone
+
+    from app.webpage import PageContextBuilder, WebPage
+
+    class StubService:
+        def fetch(self, url):
+            return WebPage(
+                url=url, title="Example", text="Some content.", fetched_at=datetime.now(timezone.utc)
+            )
+
+        def build_context(self, page):
+            return PageContextBuilder().build(page)
+
+    result = FetchPageTool(service=StubService()).execute({"url": "https://example.com"})
+
+    assert result.success
+    assert "Example" in result.result
+    assert "Some content." in result.result
+
+
+def test_fetch_page_tool_requires_url_argument():
+    result = FetchPageTool(service=None).execute({})
+
+    assert not result.success
+    assert "url" in result.error
+
+
+def test_fetch_page_tool_handles_ssrf_error():
+    from app.webpage import URLSafetyError
+
+    class FailingService:
+        def fetch(self, url):
+            raise URLSafetyError("unsafe address")
+
+    result = FetchPageTool(service=FailingService()).execute({"url": "http://127.0.0.1"})
+
+    assert result.success
+    assert "unsafe" in result.result.lower()
+
+
+def test_fetch_page_tool_handles_unsupported_content_type():
+    from app.webpage import UnsupportedContentTypeError
+
+    class FailingService:
+        def fetch(self, url):
+            raise UnsupportedContentTypeError("nope")
+
+    result = FetchPageTool(service=FailingService()).execute({"url": "https://example.com/file.pdf"})
+
+    assert result.success
+    assert "content type" in result.result.lower()
+
+
+def test_fetch_page_tool_handles_generic_fetch_error():
+    from app.webpage import PageFetchError
+
+    class FailingService:
+        def fetch(self, url):
+            raise PageFetchError("boom")
+
+    result = FetchPageTool(service=FailingService()).execute({"url": "https://example.com"})
+
+    assert result.success
+    assert "couldn't fetch" in result.result.lower()
+
+
 def test_tool_validate_arguments_checks_type():
     tool = CalculatorTool()
 
@@ -171,9 +238,9 @@ def test_registry_schemas_expose_name_description_parameters():
     assert "parameters" in schemas[0]["function"]
 
 
-def test_default_registry_includes_all_day6_tools():
+def test_default_registry_includes_all_day9_tools():
     registry = default_registry()
 
     names = {schema["function"]["name"] for schema in registry.schemas()}
 
-    assert names == {"calculator", "get_time", "search"}
+    assert names == {"calculator", "get_time", "search", "fetch_page"}

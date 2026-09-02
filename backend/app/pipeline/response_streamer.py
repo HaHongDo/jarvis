@@ -5,9 +5,14 @@ import time
 import uuid
 from typing import Callable, Optional
 
-from ..config import MAX_SEARCHES_PER_REQUEST, MAX_TOOL_ROUNDS, TTS_MIN_CHUNK_CHARACTERS
+from ..config import (
+    MAX_PAGE_FETCHES_PER_REQUEST,
+    MAX_SEARCHES_PER_REQUEST,
+    MAX_TOOL_ROUNDS,
+    TTS_MIN_CHUNK_CHARACTERS,
+)
 from ..llm.base import LLM, ToolCall
-from ..search.normalizer import normalize_query
+from ..search.normalizer import normalize_query, normalize_url
 from ..tts.base import TextToSpeech
 from ..tts.preprocessing import preprocess_for_speech
 from ..tools.base import ToolResult
@@ -26,6 +31,11 @@ _MAX_ROUNDS_ERROR_MESSAGE = (
 _SEARCH_TOOL_NAME = "search"
 _SEARCH_BUDGET_EXHAUSTED_MESSAGE = (
     f"Search budget exhausted for this request (max {MAX_SEARCHES_PER_REQUEST} searches)."
+)
+
+_FETCH_PAGE_TOOL_NAME = "fetch_page"
+_PAGE_FETCH_BUDGET_EXHAUSTED_MESSAGE = (
+    f"Page-fetch budget exhausted for this request (max {MAX_PAGE_FETCHES_PER_REQUEST} fetches)."
 )
 
 
@@ -53,9 +63,11 @@ class ResponseStreamer:
 
     Each call to `stream_response` is one user turn ("request"). Within a turn, calls to
     the `search` tool are capped at `max_searches_per_request` and de-duplicated by
-    normalized query + time_range, so a model that loops or asks near-identical questions
-    can't spam the search backend; the streamer also tracks how many turns actually used
-    search for the `search_requests / total_requests` metric.
+    normalized query + time_range, and calls to the `fetch_page` tool are capped at
+    `max_page_fetches_per_request` and de-duplicated by normalized URL, so a model that
+    loops or asks near-identical questions can't spam the search backend or refetch the
+    same page; the streamer also tracks how many turns actually used search/fetch_page
+    for the `search_requests` / `page_fetch_requests` over `total_requests` metrics.
     """
 
     def __init__(
@@ -66,6 +78,7 @@ class ResponseStreamer:
         tool_registry: Optional[ToolRegistry] = None,
         max_tool_rounds: int = MAX_TOOL_ROUNDS,
         max_searches_per_request: int = MAX_SEARCHES_PER_REQUEST,
+        max_page_fetches_per_request: int = MAX_PAGE_FETCHES_PER_REQUEST,
     ):
         self.llm = llm
         self.tts = tts
@@ -73,8 +86,10 @@ class ResponseStreamer:
         self.tool_registry = tool_registry
         self.max_tool_rounds = max_tool_rounds
         self.max_searches_per_request = max_searches_per_request
+        self.max_page_fetches_per_request = max_page_fetches_per_request
         self.total_requests = 0
         self.search_requests = 0
+        self.page_fetch_requests = 0
 
     def stream_response(
         self,
@@ -102,7 +117,13 @@ class ResponseStreamer:
         player_thread.start()
 
         request_id = uuid.uuid4().hex[:8]
-        search_state = {"request_id": request_id, "count": 0, "seen": {}}
+        search_state = {
+            "request_id": request_id,
+            "count": 0,
+            "seen": {},
+            "page_count": 0,
+            "page_seen": {},
+        }
 
         try:
             assistant_response = self._produce_text(
@@ -117,9 +138,13 @@ class ResponseStreamer:
         self.total_requests += 1
         if search_state["count"] > 0:
             self.search_requests += 1
+        if search_state["page_count"] > 0:
+            self.page_fetch_requests += 1
         logger.info(
-            "[METRICS] search_requests=%d/%d total",
+            "[METRICS] search_requests=%d/%d page_fetch_requests=%d/%d total",
             self.search_requests,
+            self.total_requests,
+            self.page_fetch_requests,
             self.total_requests,
         )
         logger.info(
@@ -205,6 +230,8 @@ class ResponseStreamer:
     def _execute_tool_call(self, call: ToolCall, search_state: dict) -> str:
         if call.name == _SEARCH_TOOL_NAME:
             return self._execute_search_call(call, search_state)
+        if call.name == _FETCH_PAGE_TOOL_NAME:
+            return self._execute_fetch_page_call(call, search_state)
         return self.tool_registry.execute(call.name, call.arguments).to_content()
 
     def _execute_search_call(self, call: ToolCall, search_state: dict) -> str:
@@ -237,6 +264,40 @@ class ResponseStreamer:
         )
         content = self.tool_registry.execute(call.name, call.arguments).to_content()
         search_state["seen"][dedupe_key] = content
+        return content
+
+    def _execute_fetch_page_call(self, call: ToolCall, search_state: dict) -> str:
+        """Applies the per-request page-fetch budget and duplicate-URL detection before
+        delegating to the real fetch_page tool (see Day 9: fetch budget + dedup)."""
+        request_id = search_state["request_id"]
+        url = call.arguments.get("url", "")
+        dedupe_key = normalize_url(url) if url else url
+
+        cached_content = search_state["page_seen"].get(dedupe_key)
+        if cached_content is not None:
+            logger.info(
+                "FETCH_PAGE request=%s url=%r decision=DUPLICATE (reusing prior result)", request_id, url
+            )
+            return cached_content
+
+        if search_state["page_count"] >= self.max_page_fetches_per_request:
+            logger.warning(
+                "FETCH_PAGE request=%s url=%r decision=BUDGET_EXHAUSTED (max %d)",
+                request_id,
+                url,
+                self.max_page_fetches_per_request,
+            )
+            return ToolResult(success=False, error=_PAGE_FETCH_BUDGET_EXHAUSTED_MESSAGE).to_content()
+
+        search_state["page_count"] += 1
+        logger.info(
+            "FETCH_PAGE request=%s url=%r decision=FETCH round=%d",
+            request_id,
+            url,
+            search_state["page_count"],
+        )
+        content = self.tool_registry.execute(call.name, call.arguments).to_content()
+        search_state["page_seen"][dedupe_key] = content
         return content
 
     def _tts_worker(

@@ -307,3 +307,118 @@ def test_stream_response_tracks_search_frequency_metric():
 
     assert streamer.total_requests == 3
     assert streamer.search_requests == 1
+
+
+class _FetchPageStubTool(Tool):
+    """Fake `fetch_page` tool that records every URL it actually receives, so tests can
+    verify the streamer's per-request budget and duplicate-URL dedupe."""
+
+    name = "fetch_page"
+    description = "Fake fetch_page."
+    parameters = {
+        "type": "object",
+        "properties": {"url": {"type": "string"}},
+        "required": ["url"],
+    }
+
+    def __init__(self):
+        self.received_urls = []
+
+    def run(self, arguments):
+        self.received_urls.append(arguments["url"])
+        return f"content for {arguments['url']}"
+
+
+def _fetch_page_calling_llm(urls):
+    """Builds a stub LLM that requests a fetch_page for each URL in `urls` (one per
+    round), then answers in plain text once all URLs have been requested."""
+
+    class _FetchPageLLM(LLM):
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, tools=None):
+            raise NotImplementedError
+
+        def stream_chat(self, messages, tools=None):
+            self.calls += 1
+            if self.calls <= len(urls):
+                url = urls[self.calls - 1]
+                yield StreamEvent(tool_calls=[ToolCall(name="fetch_page", arguments={"url": url})])
+                return
+            yield StreamEvent(content="Done fetching.")
+
+    return _FetchPageLLM()
+
+
+def test_stream_response_enforces_page_fetch_budget_per_request():
+    llm = _fetch_page_calling_llm(
+        ["https://example.com/1", "https://example.com/2", "https://example.com/3", "https://example.com/4"]
+    )
+    tts = _StubTTS()
+    registry = ToolRegistry()
+    fetch_tool = _FetchPageStubTool()
+    registry.register(fetch_tool)
+    streamer = ResponseStreamer(
+        llm,
+        tts,
+        min_chunk_characters=1,
+        tool_registry=registry,
+        max_tool_rounds=10,
+        max_page_fetches_per_request=3,
+    )
+
+    reply, _timings = streamer.stream_response([{"role": "user", "content": "fetch a lot"}])
+
+    assert fetch_tool.received_urls == [
+        "https://example.com/1",
+        "https://example.com/2",
+        "https://example.com/3",
+    ]
+    assert "Done fetching." in reply
+
+
+def test_stream_response_deduplicates_repeated_page_fetch_urls():
+    llm = _fetch_page_calling_llm(
+        [
+            "https://Example.com/a/?utm_source=x",
+            "https://example.com/a",
+            "https://example.com/a",
+        ]
+    )
+    tts = _StubTTS()
+    registry = ToolRegistry()
+    fetch_tool = _FetchPageStubTool()
+    registry.register(fetch_tool)
+    streamer = ResponseStreamer(
+        llm, tts, min_chunk_characters=1, tool_registry=registry, max_tool_rounds=10, max_page_fetches_per_request=5
+    )
+
+    streamer.stream_response([{"role": "user", "content": "fetch the same page"}])
+
+    # Only the first (normalized-unique) URL actually reaches the tool.
+    assert fetch_tool.received_urls == ["https://Example.com/a/?utm_source=x"]
+
+
+def test_stream_response_tracks_page_fetch_frequency_metric():
+    tts = _StubTTS()
+    registry = ToolRegistry()
+    registry.register(_FetchPageStubTool())
+    streamer = ResponseStreamer(
+        llm=_fetch_page_calling_llm(["https://example.com/1"]),
+        tts=tts,
+        min_chunk_characters=1,
+        tool_registry=registry,
+    )
+
+    # Request 1: triggers a fetch.
+    streamer.stream_response([{"role": "user", "content": "fetch please"}])
+
+    # Requests 2 and 3: no fetch needed.
+    streamer.llm = _StubLLM(["No fetch needed."])
+    streamer.stream_response([{"role": "user", "content": "hi"}])
+    streamer.llm = _StubLLM(["Still no fetch."])
+    streamer.stream_response([{"role": "user", "content": "hi again"}])
+
+    assert streamer.total_requests == 3
+    assert streamer.page_fetch_requests == 1
