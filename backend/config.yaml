@@ -54,3 +54,11 @@ page_fetch:
   cache_ttl_seconds: 3600
   max_page_fetches_per_request: 3  # per-user-turn fetch_page budget, guards against agent loops
 
+research:
+  max_sources: 4              # search results fetched per research() call
+  chunk_size: 4000             # characters per chunk
+  chunk_overlap: 400           # characters of overlap between consecutive chunks
+  max_context_chars: 12000     # total chunk-text budget sent to the LLM per call
+  timeout_seconds: 10          # overall deadline for search+fetch within one research() call
+  max_research_per_request: 2  # per-user-turn research budget, guards against agent loops
+

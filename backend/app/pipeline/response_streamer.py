@@ -7,6 +7,7 @@ from typing import Callable, Optional
 
 from ..config import (
     MAX_PAGE_FETCHES_PER_REQUEST,
+    MAX_RESEARCH_PER_REQUEST,
     MAX_SEARCHES_PER_REQUEST,
     MAX_TOOL_ROUNDS,
     TTS_MIN_CHUNK_CHARACTERS,
@@ -38,6 +39,11 @@ _PAGE_FETCH_BUDGET_EXHAUSTED_MESSAGE = (
     f"Page-fetch budget exhausted for this request (max {MAX_PAGE_FETCHES_PER_REQUEST} fetches)."
 )
 
+_RESEARCH_TOOL_NAME = "research"
+_RESEARCH_BUDGET_EXHAUSTED_MESSAGE = (
+    f"Research budget exhausted for this request (max {MAX_RESEARCH_PER_REQUEST} calls)."
+)
+
 
 def should_flush(buffer: str, min_chunk_characters: int = TTS_MIN_CHUNK_CHARACTERS) -> bool:
     """Simple punctuation-based chunk boundary, held back until a minimum length."""
@@ -63,11 +69,14 @@ class ResponseStreamer:
 
     Each call to `stream_response` is one user turn ("request"). Within a turn, calls to
     the `search` tool are capped at `max_searches_per_request` and de-duplicated by
-    normalized query + time_range, and calls to the `fetch_page` tool are capped at
-    `max_page_fetches_per_request` and de-duplicated by normalized URL, so a model that
-    loops or asks near-identical questions can't spam the search backend or refetch the
-    same page; the streamer also tracks how many turns actually used search/fetch_page
-    for the `search_requests` / `page_fetch_requests` over `total_requests` metrics.
+    normalized query + time_range, calls to the `fetch_page` tool are capped at
+    `max_page_fetches_per_request` and de-duplicated by normalized URL, and calls to the
+    `research` tool are capped at `max_research_per_request` and de-duplicated by
+    normalized query + time_range, so a model that loops or asks near-identical
+    questions can't spam the search backend, refetch the same page, or re-run an
+    expensive multi-source research call; the streamer also tracks how many turns
+    actually used search/fetch_page/research for the `search_requests` /
+    `page_fetch_requests` / `research_requests` over `total_requests` metrics.
     """
 
     def __init__(
@@ -79,6 +88,7 @@ class ResponseStreamer:
         max_tool_rounds: int = MAX_TOOL_ROUNDS,
         max_searches_per_request: int = MAX_SEARCHES_PER_REQUEST,
         max_page_fetches_per_request: int = MAX_PAGE_FETCHES_PER_REQUEST,
+        max_research_per_request: int = MAX_RESEARCH_PER_REQUEST,
     ):
         self.llm = llm
         self.tts = tts
@@ -87,9 +97,11 @@ class ResponseStreamer:
         self.max_tool_rounds = max_tool_rounds
         self.max_searches_per_request = max_searches_per_request
         self.max_page_fetches_per_request = max_page_fetches_per_request
+        self.max_research_per_request = max_research_per_request
         self.total_requests = 0
         self.search_requests = 0
         self.page_fetch_requests = 0
+        self.research_requests = 0
 
     def stream_response(
         self,
@@ -123,6 +135,8 @@ class ResponseStreamer:
             "seen": {},
             "page_count": 0,
             "page_seen": {},
+            "research_count": 0,
+            "research_seen": {},
         }
 
         try:
@@ -140,11 +154,15 @@ class ResponseStreamer:
             self.search_requests += 1
         if search_state["page_count"] > 0:
             self.page_fetch_requests += 1
+        if search_state["research_count"] > 0:
+            self.research_requests += 1
         logger.info(
-            "[METRICS] search_requests=%d/%d page_fetch_requests=%d/%d total",
+            "[METRICS] search_requests=%d/%d page_fetch_requests=%d/%d research_requests=%d/%d total",
             self.search_requests,
             self.total_requests,
             self.page_fetch_requests,
+            self.total_requests,
+            self.research_requests,
             self.total_requests,
         )
         logger.info(
@@ -232,6 +250,8 @@ class ResponseStreamer:
             return self._execute_search_call(call, search_state)
         if call.name == _FETCH_PAGE_TOOL_NAME:
             return self._execute_fetch_page_call(call, search_state)
+        if call.name == _RESEARCH_TOOL_NAME:
+            return self._execute_research_call(call, search_state)
         return self.tool_registry.execute(call.name, call.arguments).to_content()
 
     def _execute_search_call(self, call: ToolCall, search_state: dict) -> str:
@@ -298,6 +318,42 @@ class ResponseStreamer:
         )
         content = self.tool_registry.execute(call.name, call.arguments).to_content()
         search_state["page_seen"][dedupe_key] = content
+        return content
+
+    def _execute_research_call(self, call: ToolCall, search_state: dict) -> str:
+        """Applies the per-request research budget and duplicate-query detection before
+        delegating to the real research tool (see Day 10: research budget + dedup)."""
+        request_id = search_state["request_id"]
+        query = call.arguments.get("query", "")
+        dedupe_key = (normalize_query(query), call.arguments.get("time_range"))
+
+        cached_content = search_state["research_seen"].get(dedupe_key)
+        if cached_content is not None:
+            logger.info(
+                "RESEARCH request=%s query=%r decision=DUPLICATE (reusing prior result)",
+                request_id,
+                query,
+            )
+            return cached_content
+
+        if search_state["research_count"] >= self.max_research_per_request:
+            logger.warning(
+                "RESEARCH request=%s query=%r decision=BUDGET_EXHAUSTED (max %d)",
+                request_id,
+                query,
+                self.max_research_per_request,
+            )
+            return ToolResult(success=False, error=_RESEARCH_BUDGET_EXHAUSTED_MESSAGE).to_content()
+
+        search_state["research_count"] += 1
+        logger.info(
+            "RESEARCH request=%s query=%r decision=RESEARCH round=%d",
+            request_id,
+            query,
+            search_state["research_count"],
+        )
+        content = self.tool_registry.execute(call.name, call.arguments).to_content()
+        search_state["research_seen"][dedupe_key] = content
         return content
 
     def _tts_worker(

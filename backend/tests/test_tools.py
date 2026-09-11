@@ -1,4 +1,4 @@
-from app.tools import CalculatorTool, FetchPageTool, SearchTool, TimeTool, ToolRegistry, default_registry
+from app.tools import CalculatorTool, FetchPageTool, ResearchTool, SearchTool, TimeTool, ToolRegistry, default_registry
 from app.tools.base import ToolValidationError
 
 
@@ -159,6 +159,54 @@ def test_fetch_page_tool_requires_url_argument():
     assert "url" in result.error
 
 
+def test_research_tool_returns_context_text():
+    from app.research.models import ResearchContext, Source
+
+    class StubService:
+        def research(self, query, **kwargs):
+            source = Source(id="src_001", url="https://example.com", title="Redis 8", content="c")
+            return ResearchContext(
+                query=query, sources=[source], context_text=f"## Research Results\n\n[1] {source.title}"
+            )
+
+    result = ResearchTool(service=StubService()).execute({"query": "compare Redis and PostgreSQL"})
+
+    assert result.success
+    assert "Redis 8" in result.result
+
+
+def test_research_tool_forwards_time_range_and_freshness():
+    from app.research.models import ResearchContext
+
+    class RecordingService:
+        def __init__(self):
+            self.calls = []
+
+        def research(self, query, **kwargs):
+            self.calls.append((query, kwargs))
+            return ResearchContext(query=query, sources=[], context_text="")
+
+    service = RecordingService()
+    ResearchTool(service=service).execute(
+        {"query": "go 1.26 changes", "time_range": "month", "freshness": "recent"}
+    )
+
+    assert service.calls == [("go 1.26 changes", {"time_range": "month", "freshness": "recent"})]
+
+
+def test_research_tool_reports_no_sources_gracefully():
+    from app.research.models import ResearchContext
+
+    class StubService:
+        def research(self, query, **kwargs):
+            return ResearchContext(query=query)
+
+    result = ResearchTool(service=StubService()).execute({"query": "anything"})
+
+    assert result.success
+    assert "couldn't retrieve" in result.result
+
+
 def test_fetch_page_tool_handles_ssrf_error():
     from app.webpage import URLSafetyError
 
@@ -238,9 +286,9 @@ def test_registry_schemas_expose_name_description_parameters():
     assert "parameters" in schemas[0]["function"]
 
 
-def test_default_registry_includes_all_day9_tools():
+def test_default_registry_includes_all_day10_tools():
     registry = default_registry()
 
     names = {schema["function"]["name"] for schema in registry.schemas()}
 
-    assert names == {"calculator", "get_time", "search", "fetch_page"}
+    assert names == {"calculator", "get_time", "search", "fetch_page", "research"}

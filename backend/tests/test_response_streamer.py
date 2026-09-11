@@ -422,3 +422,106 @@ def test_stream_response_tracks_page_fetch_frequency_metric():
 
     assert streamer.total_requests == 3
     assert streamer.page_fetch_requests == 1
+
+
+class _ResearchStubTool(Tool):
+    """Fake `research` tool that records every query it actually receives, so tests
+    can verify the streamer's per-request budget and duplicate-query dedupe."""
+
+    name = "research"
+    description = "Fake research."
+    parameters = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+
+    def __init__(self):
+        self.received_queries = []
+
+    def run(self, arguments):
+        self.received_queries.append(arguments["query"])
+        return f"research context for {arguments['query']}"
+
+
+def _research_calling_llm(queries):
+    """Builds a stub LLM that requests `research` for each query in `queries` (one per
+    round), then answers in plain text once all queries have been requested."""
+
+    class _ResearchLLM(LLM):
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, tools=None):
+            raise NotImplementedError
+
+        def stream_chat(self, messages, tools=None):
+            self.calls += 1
+            if self.calls <= len(queries):
+                query = queries[self.calls - 1]
+                yield StreamEvent(tool_calls=[ToolCall(name="research", arguments={"query": query})])
+                return
+            yield StreamEvent(content="Done researching.")
+
+    return _ResearchLLM()
+
+
+def test_stream_response_enforces_research_budget_per_request():
+    llm = _research_calling_llm(["go vs rust", "redis vs postgres", "one more topic"])
+    tts = _StubTTS()
+    registry = ToolRegistry()
+    research_tool = _ResearchStubTool()
+    registry.register(research_tool)
+    streamer = ResponseStreamer(
+        llm,
+        tts,
+        min_chunk_characters=1,
+        tool_registry=registry,
+        max_tool_rounds=10,
+        max_research_per_request=2,
+    )
+
+    reply, _timings = streamer.stream_response([{"role": "user", "content": "compare a lot of things"}])
+
+    assert research_tool.received_queries == ["go vs rust", "redis vs postgres"]
+    assert "Done researching." in reply
+
+
+def test_stream_response_deduplicates_repeated_research_queries():
+    llm = _research_calling_llm(["  Go VS Rust  ", "go vs rust", "go vs rust"])
+    tts = _StubTTS()
+    registry = ToolRegistry()
+    research_tool = _ResearchStubTool()
+    registry.register(research_tool)
+    streamer = ResponseStreamer(
+        llm, tts, min_chunk_characters=1, tool_registry=registry, max_tool_rounds=10, max_research_per_request=5
+    )
+
+    streamer.stream_response([{"role": "user", "content": "compare the same thing repeatedly"}])
+
+    # Only the first (normalized-unique) query actually reaches the tool.
+    assert research_tool.received_queries == ["  Go VS Rust  "]
+
+
+def test_stream_response_tracks_research_frequency_metric():
+    tts = _StubTTS()
+    registry = ToolRegistry()
+    registry.register(_ResearchStubTool())
+    streamer = ResponseStreamer(
+        llm=_research_calling_llm(["go vs rust"]),
+        tts=tts,
+        min_chunk_characters=1,
+        tool_registry=registry,
+    )
+
+    # Request 1: triggers research.
+    streamer.stream_response([{"role": "user", "content": "compare please"}])
+
+    # Requests 2 and 3: no research needed.
+    streamer.llm = _StubLLM(["No research needed."])
+    streamer.stream_response([{"role": "user", "content": "hi"}])
+    streamer.llm = _StubLLM(["Still no research."])
+    streamer.stream_response([{"role": "user", "content": "hi again"}])
+
+    assert streamer.total_requests == 3
+    assert streamer.research_requests == 1
