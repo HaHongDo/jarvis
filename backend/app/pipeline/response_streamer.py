@@ -6,6 +6,7 @@ import uuid
 from typing import Callable, Optional
 
 from ..config import (
+    MAX_KNOWLEDGE_SEARCHES_PER_REQUEST,
     MAX_PAGE_FETCHES_PER_REQUEST,
     MAX_RESEARCH_PER_REQUEST,
     MAX_SEARCHES_PER_REQUEST,
@@ -44,6 +45,11 @@ _RESEARCH_BUDGET_EXHAUSTED_MESSAGE = (
     f"Research budget exhausted for this request (max {MAX_RESEARCH_PER_REQUEST} calls)."
 )
 
+_KNOWLEDGE_TOOL_NAME = "search_knowledge"
+_KNOWLEDGE_BUDGET_EXHAUSTED_MESSAGE = (
+    f"Knowledge-search budget exhausted for this request (max {MAX_KNOWLEDGE_SEARCHES_PER_REQUEST} calls)."
+)
+
 
 def should_flush(buffer: str, min_chunk_characters: int = TTS_MIN_CHUNK_CHARACTERS) -> bool:
     """Simple punctuation-based chunk boundary, held back until a minimum length."""
@@ -72,11 +78,14 @@ class ResponseStreamer:
     normalized query + time_range, calls to the `fetch_page` tool are capped at
     `max_page_fetches_per_request` and de-duplicated by normalized URL, and calls to the
     `research` tool are capped at `max_research_per_request` and de-duplicated by
-    normalized query + time_range, so a model that loops or asks near-identical
-    questions can't spam the search backend, refetch the same page, or re-run an
-    expensive multi-source research call; the streamer also tracks how many turns
-    actually used search/fetch_page/research for the `search_requests` /
-    `page_fetch_requests` / `research_requests` over `total_requests` metrics.
+    normalized query + time_range, and calls to the `search_knowledge` tool are capped at
+    `max_knowledge_searches_per_request` and de-duplicated by normalized query, so a model
+    that loops or asks near-identical questions can't spam the search backend, refetch the
+    same page, re-run an expensive multi-source research call, or repeatedly re-embed the
+    same knowledge-base query; the streamer also tracks how many turns actually used
+    search/fetch_page/research/search_knowledge for the `search_requests` /
+    `page_fetch_requests` / `research_requests` / `knowledge_requests` over `total_requests`
+    metrics.
     """
 
     def __init__(
@@ -89,6 +98,7 @@ class ResponseStreamer:
         max_searches_per_request: int = MAX_SEARCHES_PER_REQUEST,
         max_page_fetches_per_request: int = MAX_PAGE_FETCHES_PER_REQUEST,
         max_research_per_request: int = MAX_RESEARCH_PER_REQUEST,
+        max_knowledge_searches_per_request: int = MAX_KNOWLEDGE_SEARCHES_PER_REQUEST,
     ):
         self.llm = llm
         self.tts = tts
@@ -98,10 +108,12 @@ class ResponseStreamer:
         self.max_searches_per_request = max_searches_per_request
         self.max_page_fetches_per_request = max_page_fetches_per_request
         self.max_research_per_request = max_research_per_request
+        self.max_knowledge_searches_per_request = max_knowledge_searches_per_request
         self.total_requests = 0
         self.search_requests = 0
         self.page_fetch_requests = 0
         self.research_requests = 0
+        self.knowledge_requests = 0
 
     def stream_response(
         self,
@@ -137,6 +149,8 @@ class ResponseStreamer:
             "page_seen": {},
             "research_count": 0,
             "research_seen": {},
+            "knowledge_count": 0,
+            "knowledge_seen": {},
         }
 
         try:
@@ -156,13 +170,18 @@ class ResponseStreamer:
             self.page_fetch_requests += 1
         if search_state["research_count"] > 0:
             self.research_requests += 1
+        if search_state["knowledge_count"] > 0:
+            self.knowledge_requests += 1
         logger.info(
-            "[METRICS] search_requests=%d/%d page_fetch_requests=%d/%d research_requests=%d/%d total",
+            "[METRICS] search_requests=%d/%d page_fetch_requests=%d/%d research_requests=%d/%d "
+            "knowledge_requests=%d/%d total",
             self.search_requests,
             self.total_requests,
             self.page_fetch_requests,
             self.total_requests,
             self.research_requests,
+            self.total_requests,
+            self.knowledge_requests,
             self.total_requests,
         )
         logger.info(
@@ -252,6 +271,8 @@ class ResponseStreamer:
             return self._execute_fetch_page_call(call, search_state)
         if call.name == _RESEARCH_TOOL_NAME:
             return self._execute_research_call(call, search_state)
+        if call.name == _KNOWLEDGE_TOOL_NAME:
+            return self._execute_knowledge_call(call, search_state)
         return self.tool_registry.execute(call.name, call.arguments).to_content()
 
     def _execute_search_call(self, call: ToolCall, search_state: dict) -> str:
@@ -354,6 +375,43 @@ class ResponseStreamer:
         )
         content = self.tool_registry.execute(call.name, call.arguments).to_content()
         search_state["research_seen"][dedupe_key] = content
+        return content
+
+    def _execute_knowledge_call(self, call: ToolCall, search_state: dict) -> str:
+        """Applies the per-request knowledge-search budget and duplicate-query
+        detection before delegating to the real search_knowledge tool (see Day 11:
+        knowledge budget + dedup)."""
+        request_id = search_state["request_id"]
+        query = call.arguments.get("query", "")
+        dedupe_key = normalize_query(query)
+
+        cached_content = search_state["knowledge_seen"].get(dedupe_key)
+        if cached_content is not None:
+            logger.info(
+                "KNOWLEDGE request=%s query=%r decision=DUPLICATE (reusing prior result)",
+                request_id,
+                query,
+            )
+            return cached_content
+
+        if search_state["knowledge_count"] >= self.max_knowledge_searches_per_request:
+            logger.warning(
+                "KNOWLEDGE request=%s query=%r decision=BUDGET_EXHAUSTED (max %d)",
+                request_id,
+                query,
+                self.max_knowledge_searches_per_request,
+            )
+            return ToolResult(success=False, error=_KNOWLEDGE_BUDGET_EXHAUSTED_MESSAGE).to_content()
+
+        search_state["knowledge_count"] += 1
+        logger.info(
+            "KNOWLEDGE request=%s query=%r decision=SEARCH round=%d",
+            request_id,
+            query,
+            search_state["knowledge_count"],
+        )
+        content = self.tool_registry.execute(call.name, call.arguments).to_content()
+        search_state["knowledge_seen"][dedupe_key] = content
         return content
 
     def _tts_worker(

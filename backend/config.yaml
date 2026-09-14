@@ -62,3 +62,13 @@ research:
   timeout_seconds: 10          # overall deadline for search+fetch within one research() call
   max_research_per_request: 2  # per-user-turn research budget, guards against agent loops
 
+knowledge:
+  directory: knowledge               # local notes/docs directory, relative to backend/
+  db_path: knowledge.db              # sqlite vector store file, relative to backend/
+  embedding_model: nomic-embed-text  # local Ollama embedding model
+  chunk_size: 1200                   # characters per chunk
+  chunk_overlap: 200                 # characters of overlap between consecutive chunks
+  top_k: 5                           # chunks returned per search_knowledge() call
+  max_context_chars: 6000            # total chunk-text budget sent to the LLM per call
+  max_knowledge_searches_per_request: 3  # per-user-turn budget, guards against agent loops
+

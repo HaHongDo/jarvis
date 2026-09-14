@@ -15,11 +15,14 @@ Microphone -> MicrophoneStream -> OpenWakeWordDetector -> "Hey Jarvis"
 
 The LLM can call tools registered in `app/tools/`:
 
-| Tool         | Purpose                                             |
-|--------------|------------------------------------------------------|
-| `calculator` | Evaluates a math expression (safe AST eval, no `eval()`) |
-| `get_time`   | Current date/time for an IANA timezone               |
-| `search`     | Web search backed by a local SearXNG instance          |
+| Tool               | Purpose                                             |
+|--------------------|------------------------------------------------------|
+| `calculator`       | Evaluates a math expression (safe AST eval, no `eval()`) |
+| `get_time`         | Current date/time for an IANA timezone               |
+| `search`           | Web search backed by a local SearXNG instance          |
+| `fetch_page`       | Fetches and extracts a single webpage's content        |
+| `research`         | Multi-source web research (search + fetch + dedup + chunk) |
+| `search_knowledge` | Semantic search over the user's private local knowledge base |
 
 `ResponseStreamer` runs the tool-calling loop itself: if the model asks for a tool instead
 of answering, the tool is executed via `ToolRegistry` (which validates arguments against
@@ -27,6 +30,35 @@ the tool's JSON-schema `parameters` and logs every call), the result is fed back
 model, and the loop repeats — up to `tools.max_rounds` in `config.yaml` — until the model
 answers in plain text. Raw tool output is never sent to TTS directly; only the model's
 natural-language response is spoken.
+
+### Private knowledge base / RAG (`app/knowledge/`)
+
+`search_knowledge` is a separate, local-only retrieval path over the user's own notes and
+docs — never sent to the web:
+
+```text
+knowledge/<notes|docs|projects>/*.md, *.txt
+    ↓ ingest (python -m app.ingest [directory])
+load_documents -> chunk_document -> OllamaEmbedder -> VectorStore (SQLite)
+    ↓ search_knowledge(query)
+OllamaEmbedder.embed_query -> cosine similarity over stored chunks -> top-K matches
+    -> KnowledgeContextBuilder (title/path/score-attributed context for the LLM)
+```
+
+Ingestion is incremental: each document's SHA-256 content hash is stored, so
+unchanged files are skipped on re-ingestion, changed files are re-chunked/re-embedded,
+and files removed from disk have their chunks deleted. Run ingestion after adding or
+editing notes:
+
+```bash
+python -m app.ingest knowledge/
+```
+
+Embeddings use a local Ollama embedding model (`knowledge.embedding_model` in
+`config.yaml`, default `nomic-embed-text` — run `ollama pull nomic-embed-text` once).
+The vector store is a single SQLite file (`knowledge.db`); similarity search is a
+brute-force cosine scan, which is fine for a personal-scale knowledge base.
+
 
 ### Web search (`app/search/`)
 

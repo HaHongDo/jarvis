@@ -1,4 +1,13 @@
-from app.tools import CalculatorTool, FetchPageTool, ResearchTool, SearchTool, TimeTool, ToolRegistry, default_registry
+from app.tools import (
+    CalculatorTool,
+    FetchPageTool,
+    KnowledgeSearchTool,
+    ResearchTool,
+    SearchTool,
+    TimeTool,
+    ToolRegistry,
+    default_registry,
+)
 from app.tools.base import ToolValidationError
 
 
@@ -129,6 +138,48 @@ def test_search_tool_handles_backend_errors_gracefully():
 
     assert result.success
     assert "couldn't reach" in result.result
+
+
+def test_knowledge_search_tool_returns_context_text():
+    from app.knowledge import KnowledgeContextBuilder, KnowledgeMatch
+
+    match = KnowledgeMatch(
+        chunk_id="c0", document_id="d0", title="Redis Notes", path="notes/redis.md",
+        text="Redis can implement rate limiting.", position=0, score=0.9,
+    )
+
+    class StubService:
+        def search(self, query, **kwargs):
+            return [match]
+
+        def build_context(self, query, matches):
+            return KnowledgeContextBuilder(max_context_chars=1000).build(query, matches)
+
+    result = KnowledgeSearchTool(service=StubService()).execute({"query": "rate limiting"})
+
+    assert result.success
+    assert "Redis Notes" in result.result
+
+
+def test_knowledge_search_tool_handles_no_matches():
+    class StubService:
+        def search(self, query, **kwargs):
+            return []
+
+        def build_context(self, query, matches):
+            raise AssertionError("build_context should not be called with no matches")
+
+    result = KnowledgeSearchTool(service=StubService()).execute({"query": "anything"})
+
+    assert result.success
+    assert "No relevant information" in result.result
+
+
+def test_knowledge_search_tool_validates_missing_query():
+    result = KnowledgeSearchTool(service=object()).execute({})
+
+    assert not result.success
+    assert "query" in result.error
 
 
 def test_fetch_page_tool_returns_context_text():
@@ -286,9 +337,9 @@ def test_registry_schemas_expose_name_description_parameters():
     assert "parameters" in schemas[0]["function"]
 
 
-def test_default_registry_includes_all_day10_tools():
+def test_default_registry_includes_all_day11_tools():
     registry = default_registry()
 
     names = {schema["function"]["name"] for schema in registry.schemas()}
 
-    assert names == {"calculator", "get_time", "search", "fetch_page", "research"}
+    assert names == {"calculator", "get_time", "search", "fetch_page", "research", "search_knowledge"}
