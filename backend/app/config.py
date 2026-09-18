@@ -223,3 +223,29 @@ SPEECH_DEBUG_LOGGING = _speech_config.get("debug_logging", False)
 # transcript. Off by default since it costs an extra LLM round-trip per turn.
 SPEECH_LLM_FALLBACK_ENABLED = _speech_config.get("llm_fallback_enabled", False)
 SPEECH_LLM_FALLBACK_CONFIDENCE = _speech_config.get("llm_fallback_confidence", 0.8)
+
+# context-aware vocabulary settings (Day 14): which slice of the vocabulary is
+# "active" for the current conversation topic, fed to STT as a transcription hint
+# and to the normalizer as correction context (see app/speech/vocabulary_manager.py).
+_vocab_config = _speech_config.get("vocabulary", {})
+
+SPEECH_VOCAB_MAX_ACTIVE_DOMAINS = _vocab_config.get("max_active_domains", 2)
+SPEECH_VOCAB_MAX_PROMPT_TERMS = _vocab_config.get("max_prompt_terms", 24)
+SPEECH_VOCAB_MAX_HOTWORDS = _vocab_config.get("max_hotwords", 12)
+SPEECH_VOCAB_MAX_RECENT_TERMS = _vocab_config.get("max_recent_terms", 10)
+
+# Weighted keyword score a domain needs to count as active. One decisive keyword
+# ("goroutine") clears it on its own; two ambiguous ones are needed otherwise.
+SPEECH_VOCAB_MIN_DOMAIN_SCORE = _vocab_config.get("min_domain_score", 1.0)
+
+# Vocabulary decay (plan item 10), by seconds since the domain was last mentioned:
+# full relevance, then 50%, then 20%, then dropped entirely.
+SPEECH_VOCAB_RECENT_SECONDS = _vocab_config.get("recent_seconds", 120)
+SPEECH_VOCAB_DECAY_SECONDS = _vocab_config.get("decay_seconds", 600)
+SPEECH_VOCAB_STALE_SECONDS = _vocab_config.get("stale_seconds", 1800)
+
+# Feeding the active vocabulary *into* STT (plan items 11-12). Both are hints, not
+# guarantees - keep them switchable so their effect can actually be measured
+# (python -m app.speech.evaluate_stt).
+SPEECH_STT_PROMPT_ENABLED = _vocab_config.get("stt_prompt_enabled", True)
+SPEECH_STT_HOTWORDS_ENABLED = _vocab_config.get("stt_hotwords_enabled", True)

@@ -1,7 +1,38 @@
 from .llm_fallback import LLMCorrectionFallback
-from .models import Correction, NormalizationResult, TechnicalTerm, UncertainMatch, VocabularyContext
-from .normalizer import SpeechNormalizer
-from .vocabulary import GO_CONTEXT, JAVA_CONTEXT, PYTHON_CONTEXT, TECH_TERMS, context_for_domain
+from .models import (
+    SOURCE_CONTEXT_MATCH,
+    SOURCE_EXACT_MATCH,
+    SOURCE_LLM_FALLBACK,
+    SOURCE_STT_HINT,
+    ActiveVocabulary,
+    ConversationContext,
+    Correction,
+    NormalizationResult,
+    TechnicalTerm,
+    UncertainMatch,
+    VocabularyContext,
+)
+from .normalizer import NormalizationMetrics, SpeechNormalizer
+from .vocabulary import (
+    DOMAIN_KEYWORDS,
+    DOMAIN_LABELS,
+    GO_CONTEXT,
+    JAVA_CONTEXT,
+    PYTHON_CONTEXT,
+    TECH_TERMS,
+    VOCABULARY_DOMAINS,
+    context_for_domain,
+    known_domains,
+    terms_for_domain,
+)
+from .vocabulary_manager import (
+    VocabularyManager,
+    build_hotwords,
+    build_stt_prompt,
+    detect_domain,
+    detect_topic_switch,
+    score_domains,
+)
 
 __all__ = [
     "Correction",
@@ -9,11 +40,29 @@ __all__ = [
     "TechnicalTerm",
     "UncertainMatch",
     "VocabularyContext",
+    "ActiveVocabulary",
+    "ConversationContext",
+    "SOURCE_EXACT_MATCH",
+    "SOURCE_CONTEXT_MATCH",
+    "SOURCE_LLM_FALLBACK",
+    "SOURCE_STT_HINT",
     "SpeechNormalizer",
+    "NormalizationMetrics",
     "LLMCorrectionFallback",
     "TECH_TERMS",
+    "VOCABULARY_DOMAINS",
+    "DOMAIN_KEYWORDS",
+    "DOMAIN_LABELS",
     "context_for_domain",
+    "terms_for_domain",
+    "known_domains",
     "GO_CONTEXT",
     "JAVA_CONTEXT",
     "PYTHON_CONTEXT",
+    "VocabularyManager",
+    "detect_domain",
+    "detect_topic_switch",
+    "score_domains",
+    "build_stt_prompt",
+    "build_hotwords",
 ]

@@ -8,13 +8,15 @@ from .config import (
     SILENCE_TIMEOUT_MS,
     SPEECH_DEBUG_LOGGING,
     SPEECH_LLM_FALLBACK_ENABLED,
+    SPEECH_STT_HOTWORDS_ENABLED,
+    SPEECH_STT_PROMPT_ENABLED,
     SYSTEM_PROMPT,
     TTS_MIN_CHUNK_CHARACTERS,
     WAKEWORD_ACTIVATION_DELAY_MS,
 )
 from .llm import OllamaConnectionError, OllamaLLM, OllamaModelNotFoundError
 from .pipeline import ResponseStreamer
-from .speech import LLMCorrectionFallback, SpeechNormalizer
+from .speech import LLMCorrectionFallback, SpeechNormalizer, VocabularyManager
 from .state import AssistantState
 from .stt import FasterWhisperSTT
 from .tools import default_registry
@@ -58,6 +60,9 @@ def run():
     tts = KokoroTTS()
     wakeword = OpenWakeWordDetector()
     tool_registry = default_registry()
+    # Day 14: one vocabulary source feeding both sides of STT - a transcription
+    # hint before it, correction context after it.
+    vocabulary = VocabularyManager()
     speech_normalizer = SpeechNormalizer(
         llm_fallback=LLMCorrectionFallback(llm) if SPEECH_LLM_FALLBACK_ENABLED else None,
         debug=SPEECH_DEBUG_LOGGING,
@@ -84,7 +89,11 @@ def run():
             t0 = time.perf_counter()  # user stopped speaking
 
             _set_state(AssistantState.TRANSCRIBING)
-            user_input = stt.transcribe(audio)
+            user_input = stt.transcribe(
+                audio,
+                initial_prompt=vocabulary.stt_prompt() if SPEECH_STT_PROMPT_ENABLED else None,
+                hotwords=vocabulary.hotwords() if SPEECH_STT_HOTWORDS_ENABLED else None,
+            )
             stt_latency = time.perf_counter() - t0
 
             if not user_input:
@@ -93,10 +102,20 @@ def run():
                 wakeword.reset()
                 continue
 
-            normalization = speech_normalizer.normalize(user_input)
+            # Score this utterance into the conversation topic first, so an
+            # explicit "let's switch to Java" applies to the sentence that
+            # announced it, then normalize with the resulting context.
+            conversation_context = vocabulary.observe(user_input)
+            normalization = speech_normalizer.normalize(user_input, conversation_context=conversation_context)
+            vocabulary.observe_result(normalization)
             user_input = normalization.normalized
             if normalization.changes:
-                logger.info("[SpeechNormalizer] %s -> %s", normalization.original, normalization.normalized)
+                logger.info(
+                    "[SpeechNormalizer] (%s) %s -> %s",
+                    conversation_context.active_domain or "no domain",
+                    normalization.original,
+                    normalization.normalized,
+                )
 
             print(f"You: {user_input}")
 

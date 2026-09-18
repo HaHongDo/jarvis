@@ -5,8 +5,17 @@ from typing import Iterator, Optional
 import pytest
 
 from app.llm.base import LLM, LLMResponse, StreamEvent
-from app.speech import LLMCorrectionFallback, SpeechNormalizer, context_for_domain
-from app.speech.evaluate import evaluate, load_cases
+from app.speech import (
+    SOURCE_CONTEXT_MATCH,
+    SOURCE_EXACT_MATCH,
+    SOURCE_LLM_FALLBACK,
+    ConversationContext,
+    LLMCorrectionFallback,
+    SpeechNormalizer,
+    VocabularyManager,
+    context_for_domain,
+)
+from app.speech.evaluate import evaluate, evaluate_by_category, load_cases
 
 CASES_PATH = Path(__file__).parent / "speech" / "terminology.json"
 
@@ -57,6 +66,20 @@ def test_evaluation_precision_and_recall_are_high(normalizer):
     assert report.incorrectly_changed == 0
     assert report.precision == 100.0
     assert report.recall == 100.0
+
+
+def test_corpus_covers_every_day_14_domain():
+    """Day 14 item 16: the corpus spans the technical domains, not just Go."""
+    categories = {case.category for case in load_cases(CASES_PATH)}
+
+    assert len(load_cases(CASES_PATH)) >= 100
+    assert {"golang", "java", "python", "database", "infrastructure", "distributed_systems"} <= categories
+
+
+def test_no_domain_regresses(normalizer):
+    for category, report in evaluate_by_category(normalizer, load_cases(CASES_PATH)).items():
+        assert report.incorrectly_changed == 0, category
+        assert report.missed_corrections == 0, category
 
 
 # ---------------------------------------------------------------------------
@@ -168,3 +191,94 @@ def test_llm_fallback_never_runs_without_uncertain_matches():
     result = normalizer.normalize("how does a gore teen communicate")
 
     assert result.normalized == "how does a goroutine communicate"
+
+
+# ---------------------------------------------------------------------------
+# Correction provenance (day 14 item 15)
+# ---------------------------------------------------------------------------
+
+
+def test_high_confidence_correction_is_tagged_as_an_exact_match(normalizer):
+    [change] = normalizer.normalize("how does a gore teen work").changes
+
+    assert change.source == SOURCE_EXACT_MATCH
+
+
+def test_context_gated_correction_is_tagged_as_a_context_match(normalizer):
+    [change] = normalizer.normalize("we use red is for caching", context=context_for_domain("database")).changes
+
+    assert change.source == SOURCE_CONTEXT_MATCH
+
+
+def test_llm_confirmed_correction_is_tagged_as_an_llm_fallback():
+    fallback = LLMCorrectionFallback(_FakeLLM('[{"index": 1, "confirmed": true, "confidence": 0.9}]'))
+    normalizer = SpeechNormalizer(llm_fallback=fallback)
+
+    [change] = normalizer.normalize("we call g c manually").changes
+
+    assert change.source == SOURCE_LLM_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# Metrics (day 14 item 20)
+# ---------------------------------------------------------------------------
+
+
+def test_metrics_count_corrected_unchanged_and_uncertain():
+    normalizer = SpeechNormalizer()
+
+    normalizer.normalize("how does a gore teen work")  # corrected
+    normalizer.normalize("the weather is nice today")  # unchanged
+    normalizer.normalize("we call g c manually")  # uncertain, no fallback configured
+
+    metrics = normalizer.metrics
+    assert metrics.total == 3
+    assert metrics.corrected == 1
+    assert metrics.unchanged == 2
+    assert metrics.uncertain == 1
+    assert metrics.llm_fallback == 0
+    assert metrics.corrections == 1
+
+
+def test_llm_fallback_metric_counts_only_calls_that_needed_it():
+    fallback = LLMCorrectionFallback(_FakeLLM('[{"index": 1, "confirmed": false, "confidence": 0.9}]'))
+    normalizer = SpeechNormalizer(llm_fallback=fallback)
+
+    normalizer.normalize("how does a gore teen work")  # resolved deterministically
+    normalizer.normalize("we call g c manually")  # needed the fallback
+
+    assert normalizer.metrics.llm_fallback == 1
+
+
+# ---------------------------------------------------------------------------
+# Conversation context (day 14 item 18)
+# ---------------------------------------------------------------------------
+
+
+def test_conversation_context_supplies_the_vocabulary(normalizer):
+    manager = VocabularyManager()
+    manager.observe("let's talk about databases")
+
+    result = normalizer.normalize("we use red is for caching", conversation_context=manager.context)
+
+    assert result.normalized == "we use Redis for caching"
+
+
+def test_explicit_context_wins_over_conversation_context(normalizer):
+    manager = VocabularyManager()
+    manager.observe("let's talk about go concurrency")
+
+    result = normalizer.normalize(
+        "we use red is for caching",
+        context=context_for_domain("database"),
+        conversation_context=manager.context,
+    )
+
+    assert result.normalized == "we use Redis for caching"
+
+
+def test_empty_conversation_context_corrects_nothing_ambiguous(normalizer):
+    result = normalizer.normalize("we use red is for caching", conversation_context=ConversationContext())
+
+    assert result.normalized == "we use red is for caching"
+    assert result.changes == []

@@ -79,6 +79,63 @@ unreachable, times out, or returns no results, the tool returns a plain-language
 (e.g. "I couldn't reach the web search service right now.") instead of raising, so the
 assistant can still respond.
 
+### Speech normalization (`app/speech/`)
+
+Technical vocabulary is what a small Whisper model gets wrong most often
+("gore teen" for goroutine, "jay vee em" for JVM, "coopernetes" for Kubernetes).
+Instead of switching to a bigger model, one vocabulary source feeds *both* sides
+of the STT stage:
+
+```text
+                 Conversation
+                      |
+                      v
+              VocabularyManager  -- active vocabulary (a few domains, not the whole DB)
+                 |          |
+ initial_prompt /           | VocabularyContext
+ hotwords                   |
+                 v          v
+      Audio -> FasterWhisperSTT -> raw transcript -> SpeechNormalizer -> normalized text -> LLM
+```
+
+`VocabularyManager` decides what the conversation is currently about by keyword
+scoring, explicit topic switches ("let's switch to Java"), and timestamp-based
+decay, then exposes the matching slice of `app/speech/vocabulary.py` as an
+`ActiveVocabulary`. That slice becomes a Whisper `initial_prompt` (plus
+faster-whisper `hotwords`) *before* transcription, and correction context
+*after* it.
+
+The normalizer stays in place even when the hints work, because hints are
+probabilistic. It is deliberately conservative — corrections are gated by
+per-term confidence:
+
+| Confidence   | Behavior                                                              |
+|--------------|-----------------------------------------------------------------------|
+| `>= 0.95`    | corrected automatically ("gore teen" -> goroutine)                     |
+| `0.75–0.95`  | corrected only if the active vocabulary confirms the topic ("wait group" -> WaitGroup) |
+| `< 0.75`     | left alone unless the optional LLM fallback confirms it ("g c" -> GC)  |
+
+Every change records where it came from (`exact_match`, `context_match`,
+`llm_fallback`), and the normalizer keeps per-run counters (`total`,
+`corrected`, `unchanged`, `uncertain`, `llm_fallback`).
+
+Two evaluation CLIs:
+
+```bash
+python -m app.speech.evaluate --by-category   # normalizer accuracy over tests/speech/terminology.json
+python -m app.speech.evaluate_stt             # does feeding vocabulary into Whisper actually help?
+```
+
+`evaluate_stt` needs recordings: copy `tests/speech/stt_cases.example.json` to
+`tests/speech/stt_cases.json`, record the sentences, and it will transcribe each
+clip four ways (baseline, baseline + normalizer, hinted, hinted + normalizer) so
+the two mechanisms can be compared. If the hinted columns don't beat the
+baseline on your setup, turn the hints off with
+`speech.vocabulary.stt_prompt_enabled` / `stt_hotwords_enabled`.
+
+New vocabulary is added by hand after a mistake is observed repeatedly and
+verified — there is no automatic learning from corrections.
+
 ## Setup
 
 ```bash
@@ -196,6 +253,8 @@ pytest
 - `tests/test_tools.py` covers `CalculatorTool`, `TimeTool`, `SearchTool`, and `ToolRegistry` (argument validation, unknown-tool handling, schema shape) — no external services required.
 - `tests/test_search.py` covers the SearXNG search pipeline (URL normalization/dedup, result normalization, context formatting, query cache, and `SearchService` orchestration) using a fake SearXNG client — no external services required.
 - `tests/test_response_streamer.py` also covers the tool-calling loop: a stub LLM that requests a tool then answers, the max-tool-rounds cutoff, and tool-error handling.
-- `tests/test_stt.py` runs prerecorded WAV files in `tests/audio/` through the STT pipeline. See `tests/audio/README.md` for which fixtures are checked in.
+- `tests/test_stt.py` runs prerecorded WAV files in `tests/audio/` through the STT pipeline. See `tests/audio/README.md` for which fixtures are checked in. It also covers vocabulary-hint wiring (`initial_prompt`/`hotwords`) against a fake Whisper model — no model load required.
+- `tests/test_speech_normalizer.py` runs the `tests/speech/terminology.json` corpus (positive, negative, and context-dependent cases) through the normalizer, plus the confidence tiers, correction provenance, metrics, and LLM fallback.
+- `tests/test_vocabulary_manager.py` covers topic detection, explicit topic switching, vocabulary decay, and the STT prompt/hotwords the active vocabulary produces.
 - `tests/test_tts.py` covers Markdown preprocessing and an integration check that Kokoro produces audio (requires Kokoro + eSpeak NG installed).
 - `tests/test_wakeword.py` covers the `WakeWordDetector` abstraction with a stub, plus an integration check against `tests/audio/hey_jarvis.wav` (requires `openwakeword` installed and the fixture present; skipped otherwise).

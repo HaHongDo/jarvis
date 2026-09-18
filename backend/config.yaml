@@ -80,4 +80,15 @@ speech:
   debug_logging: false               # log RAW/MATCH/OUTPUT for every normalize() call
   llm_fallback_enabled: false        # ask the LLM to confirm/deny low-confidence matches
   llm_fallback_confidence: 0.8       # minimum LLM-reported confidence to accept a fallback correction
+  vocabulary:                        # Day 14: context-aware active vocabulary
+    max_active_domains: 2            # topics kept active at once (keeps the vocabulary small)
+    max_prompt_terms: 24             # terms listed in the Whisper initial_prompt
+    max_hotwords: 12                 # terms passed to faster-whisper hotwords
+    max_recent_terms: 10             # recently-heard terms remembered for prompt ordering
+    min_domain_score: 1.0            # weighted keyword score needed for a domain to count as active
+    recent_seconds: 120              # 100% relevance window
+    decay_seconds: 600               # 50% relevance beyond recent_seconds
+    stale_seconds: 1800              # 20% relevance beyond decay_seconds; dropped after
+    stt_prompt_enabled: true         # pass the active vocabulary to Whisper as initial_prompt
+    stt_hotwords_enabled: true       # pass distinctive terms to faster-whisper as hotwords
 
