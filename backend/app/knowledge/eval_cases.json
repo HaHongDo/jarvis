@@ -1,0 +1,5 @@
+[
+  {"query": "How do I rate limit API requests with Redis?", "expected_document_id": "notes/redis.md"},
+  {"query": "token bucket algorithm", "expected_document_id": "notes/redis.md"},
+  {"query": "How does Redis keep rate-limit checks correct across multiple app servers?", "expected_document_id": "notes/redis.md"}
+]

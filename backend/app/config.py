@@ -201,6 +201,11 @@ KNOWLEDGE_CHUNK_OVERLAP = _knowledge_config.get("chunk_overlap", 200)
 KNOWLEDGE_TOP_K = _knowledge_config.get("top_k", 5)
 KNOWLEDGE_MAX_CONTEXT_CHARS = _knowledge_config.get("max_context_chars", 6000)
 
+# hybrid retrieval settings (Day 12): keyword + vector search combined via Reciprocal
+# Rank Fusion (see HybridRetriever in app/knowledge/retrieval.py).
+KNOWLEDGE_RRF_K = _knowledge_config.get("rrf_k", 60)
+KNOWLEDGE_CANDIDATE_LIMIT = _knowledge_config.get("candidate_limit", 20)
+
 # Per-request cap on how many search_knowledge() calls the model may make (mirrors
 # MAX_SEARCHES_PER_REQUEST / MAX_RESEARCH_PER_REQUEST).
 MAX_KNOWLEDGE_SEARCHES_PER_REQUEST = _knowledge_config.get("max_knowledge_searches_per_request", 3)

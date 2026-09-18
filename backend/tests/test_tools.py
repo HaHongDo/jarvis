@@ -141,11 +141,11 @@ def test_search_tool_handles_backend_errors_gracefully():
 
 
 def test_knowledge_search_tool_returns_context_text():
-    from app.knowledge import KnowledgeContextBuilder, KnowledgeMatch
+    from app.knowledge import KnowledgeContextBuilder, SearchResult
 
-    match = KnowledgeMatch(
+    match = SearchResult(
         chunk_id="c0", document_id="d0", title="Redis Notes", path="notes/redis.md",
-        text="Redis can implement rate limiting.", position=0, score=0.9,
+        content="Redis can implement rate limiting.", position=0, score=0.9, rank=1, source="hybrid",
     )
 
     class StubService:

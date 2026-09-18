@@ -71,4 +71,6 @@ knowledge:
   top_k: 5                           # chunks returned per search_knowledge() call
   max_context_chars: 6000            # total chunk-text budget sent to the LLM per call
   max_knowledge_searches_per_request: 3  # per-user-turn budget, guards against agent loops
+  rrf_k: 60                          # Reciprocal Rank Fusion constant (see HybridRetriever)
+  candidate_limit: 20                # candidates fetched per retriever before fusion
 

@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Optional
 
 
 @dataclass
@@ -7,7 +8,11 @@ class Document:
     """A single ingested local knowledge document (Markdown/plain text), identified
     by its path relative to the knowledge directory. `content_hash` drives
     incremental ingestion: an unchanged hash means skip re-embedding (see Day 11
-    plan: document ingestion pipeline + incremental ingestion)."""
+    plan: document ingestion pipeline + incremental ingestion).
+
+    The metadata fields are optional and populated from YAML frontmatter (see Day 12
+    plan item 13) so retrieval can be filtered to a subset of documents before
+    ranking (see Day 12 plan item 14)."""
 
     id: str
     path: str
@@ -16,6 +21,10 @@ class Document:
     content_hash: str
     created_at: datetime
     updated_at: datetime
+    source_type: Optional[str] = None
+    document_type: Optional[str] = None
+    project: Optional[str] = None
+    owner_id: Optional[str] = None
 
 
 @dataclass
@@ -32,18 +41,21 @@ class Chunk:
 
 
 @dataclass
-class KnowledgeMatch:
+class SearchResult:
     """A single scored retrieval result: a chunk plus its parent document's
-    provenance (title/path) and a similarity score, so answers can cite "your
-    notes" with a source path (see Day 11 plan items 13/20)."""
+    provenance (title/path) so answers can cite "your notes" with a source path (see
+    Day 11 plan items 13/20), and rank/source metadata used by Reciprocal Rank Fusion
+    and the retrieval debug CLI (see Day 12 plan items 6, 15)."""
 
     chunk_id: str
     document_id: str
     title: str
     path: str
-    text: str
+    content: str
     position: int
     score: float
+    rank: int
+    source: str
 
 
 @dataclass
