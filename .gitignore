@@ -1,4 +1,6 @@
 backend/.venv/
+backend/knowledge.db
 __pycache__/
 *.pyc
 .pytest_cache/
+plans/
