@@ -6,12 +6,15 @@ from .audio import AudioRecorder, MicrophoneStream
 from .config import (
     MAX_RECORDING_SECONDS,
     SILENCE_TIMEOUT_MS,
+    SPEECH_DEBUG_LOGGING,
+    SPEECH_LLM_FALLBACK_ENABLED,
     SYSTEM_PROMPT,
     TTS_MIN_CHUNK_CHARACTERS,
     WAKEWORD_ACTIVATION_DELAY_MS,
 )
 from .llm import OllamaConnectionError, OllamaLLM, OllamaModelNotFoundError
 from .pipeline import ResponseStreamer
+from .speech import LLMCorrectionFallback, SpeechNormalizer
 from .state import AssistantState
 from .stt import FasterWhisperSTT
 from .tools import default_registry
@@ -55,6 +58,10 @@ def run():
     tts = KokoroTTS()
     wakeword = OpenWakeWordDetector()
     tool_registry = default_registry()
+    speech_normalizer = SpeechNormalizer(
+        llm_fallback=LLMCorrectionFallback(llm) if SPEECH_LLM_FALLBACK_ENABLED else None,
+        debug=SPEECH_DEBUG_LOGGING,
+    )
     streamer = ResponseStreamer(
         llm, tts, min_chunk_characters=TTS_MIN_CHUNK_CHARACTERS, tool_registry=tool_registry
     )
@@ -85,6 +92,11 @@ def run():
                 print()
                 wakeword.reset()
                 continue
+
+            normalization = speech_normalizer.normalize(user_input)
+            user_input = normalization.normalized
+            if normalization.changes:
+                logger.info("[SpeechNormalizer] %s -> %s", normalization.original, normalization.normalized)
 
             print(f"You: {user_input}")
 

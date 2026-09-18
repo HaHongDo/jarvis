@@ -74,3 +74,10 @@ knowledge:
   rrf_k: 60                          # Reciprocal Rank Fusion constant (see HybridRetriever)
   candidate_limit: 20                # candidates fetched per retriever before fusion
 
+speech:
+  confidence_high: 0.95              # >= this: auto-correct regardless of context
+  confidence_medium: 0.75            # >= this (and below high): correct only if VocabularyContext confirms the domain
+  debug_logging: false               # log RAW/MATCH/OUTPUT for every normalize() call
+  llm_fallback_enabled: false        # ask the LLM to confirm/deny low-confidence matches
+  llm_fallback_confidence: 0.8       # minimum LLM-reported confidence to accept a fallback correction
+

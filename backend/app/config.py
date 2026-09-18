@@ -209,3 +209,17 @@ KNOWLEDGE_CANDIDATE_LIMIT = _knowledge_config.get("candidate_limit", 20)
 # Per-request cap on how many search_knowledge() calls the model may make (mirrors
 # MAX_SEARCHES_PER_REQUEST / MAX_RESEARCH_PER_REQUEST).
 MAX_KNOWLEDGE_SEARCHES_PER_REQUEST = _knowledge_config.get("max_knowledge_searches_per_request", 3)
+
+# speech normalizer settings (Day 13): post-STT correction of misheard technical
+# vocabulary, sitting between STT and the rest of Jarvis (see app/speech/normalizer.py).
+_speech_config = _config.get("speech", {})
+
+SPEECH_CONFIDENCE_HIGH = _speech_config.get("confidence_high", 0.95)
+SPEECH_CONFIDENCE_MEDIUM = _speech_config.get("confidence_medium", 0.75)
+SPEECH_DEBUG_LOGGING = _speech_config.get("debug_logging", False)
+
+# LLM fallback (plan item 12): only asked to confirm/deny suspicious phrases the
+# deterministic matcher couldn't resolve on its own, never to freely rewrite the
+# transcript. Off by default since it costs an extra LLM round-trip per turn.
+SPEECH_LLM_FALLBACK_ENABLED = _speech_config.get("llm_fallback_enabled", False)
+SPEECH_LLM_FALLBACK_CONFIDENCE = _speech_config.get("llm_fallback_confidence", 0.8)
